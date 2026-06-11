@@ -186,6 +186,7 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
 .gauth-bar button:hover{background:var(--amber-bg)}
 .gauth-bar.hidden{display:none}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -210,6 +211,7 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn" onclick="manualSync()">↺ Sincronizar</button>
+        <button class="btn" onclick="exportExcel()">📥 Exportar Excel</button>
         <button class="btn" onclick="showView('estadisticas')">📊 Estadísticas</button>
         <button class="btn" onclick="document.getElementById('import-excel').click()">↑ Importar</button>
         <input type="file" id="import-excel" accept=".json" style="display:none" onchange="importData(event)">
@@ -445,7 +447,7 @@ const EST_C=['CITADO','NO RESPONDE','RECHAZA OFERTA','NO CORRESPONDE'];
 const EST_E=['APROBADO','DESCARTADO RRHH','DESCARTADO COORDINACION','EN BACK UP','NO SHOW'];
 const EST_F=['CONTRATADO','NO ACEPTA OFERTA'];
 
-const SK='da_sel_v38';
+const SK='da_sel_v39';
 const SCRIPT_URL='https://script.google.com/macros/s/AKfycbyDIyCjUP5tc7Q7BcnCYIaTKrKBgW7r7mo-LYvx_rRskeTfpnUfA1GK9iAuMMHrrHD0/exec';
 let db={procesos:[],candidatos:[]};
 let isSyncing=false;
@@ -1341,6 +1343,62 @@ window.addEventListener('load', () => {
     initGapi();
   }
 });
+
+
+/* ---- EXPORT EXCEL ---- */
+function exportExcel() {
+  const wb = XLSX.utils.book_new();
+  const headers = ['Candidato','Teléfono','Fuente','Fecha Contacto','Estado Contacto',
+    'Fecha Entrevista','Estado Entrevistas','Estado Final','Fecha Incorporación','Comentarios','CV'];
+
+  // Sheet por proceso
+  db.procesos.forEach(p => {
+    const cands = db.candidatos.filter(c => c.proceso_id === p.id);
+    const rows = cands.map(c => [
+      c.candidato||'', c.telefono||'', c.fuente||'',
+      c.fecha_contacto||'', c.estado_contacto||'',
+      c.fecha_entrevista||'', c.estado_entrevistas||'',
+      c.estado_final||'', c.fecha_incorporacion||'',
+      c.comentarios||'', c.cv_url||''
+    ]);
+    const wsData = [headers, ...rows];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    // Column widths
+    ws['!cols'] = [20,14,12,14,18,14,22,16,18,40,30].map(w=>({wch:w}));
+    // Header style
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for(let C=range.s.c; C<=range.e.c; C++){
+      const cell = ws[XLSX.utils.encode_cell({r:0,c:C})];
+      if(cell) cell.s = {font:{bold:true},fill:{fgColor:{rgb:'C8102E'}},font:{bold:true,color:{rgb:'FFFFFF'}}};
+    }
+    // Sheet name max 31 chars, no special chars
+    const sheetName = p.nombre.replace(/[\/*?:[\]]/g,'').slice(0,31);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  });
+
+  // Sheet resumen
+  const resumenData = [
+    ['Proceso','Estado','Candidatos','Citados','Aprobados','Contratados','Apertura','Cierre'],
+    ...db.procesos.map(p => {
+      const cands = db.candidatos.filter(c => c.proceso_id === p.id);
+      return [
+        p.nombre, p.estado,
+        cands.length,
+        cands.filter(c=>c.estado_contacto==='CITADO').length,
+        cands.filter(c=>c.estado_entrevistas==='APROBADO').length,
+        cands.filter(c=>c.estado_final==='CONTRATADO').length,
+        p.fecha_apertura||'', p.fecha_cierre||''
+      ];
+    })
+  ];
+  const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
+  wsResumen['!cols'] = [25,10,12,10,12,14,14,14].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen');
+
+  const fecha = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `DA_Seleccion_${fecha}.xlsx`);
+  toast('Excel descargado correctamente');
+}
 
 /* ---- INIT ---- */
 (async()=>{
