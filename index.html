@@ -186,16 +186,12 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
 .gauth-bar button:hover{background:var(--amber-bg)}
 .gauth-bar.hidden{display:none}
 
-#login-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:999}
-.login-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:40px;width:360px;text-align:center}
-.login-logo{width:48px;height:48px;background:var(--red);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;font-weight:700;margin:0 auto 16px}
-.login-title{font-size:18px;font-weight:600;margin-bottom:4px}
-.login-sub{font-size:13px;color:var(--muted);margin-bottom:24px}
-.login-input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:14px;outline:none;text-align:center;letter-spacing:2px;margin-bottom:12px}
-.login-input:focus{border-color:var(--red);box-shadow:0 0 0 3px var(--red-light)}
-.login-btn{width:100%;padding:10px;background:var(--red);color:#fff;border:none;border-radius:var(--radius);font-size:14px;font-weight:500;cursor:pointer}
-.login-btn:hover{background:#a50d26}
-.login-error{color:var(--red);font-size:13px;margin-top:8px;display:none}
+.dup-alert{background:#FFF8E1;border:1px solid #FFD54F;border-radius:var(--radius);padding:10px 12px;margin-top:6px;font-size:12px;display:none}
+.dup-alert.show{display:block}
+.dup-alert .dup-title{font-weight:600;color:#E65100;margin-bottom:4px}
+.dup-alert .dup-row{display:flex;gap:8px;align-items:center;margin-top:3px}
+.dup-alert .dup-key{color:var(--muted);width:90px;flex-shrink:0}
+.dup-alert .dup-val{font-weight:500}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -371,7 +367,7 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
       <div class="form-grid">
         <div class="fsec">Datos del candidato</div>
         <div class="ff"><label>Candidato *</label><input type="text" id="f-candidato" required></div>
-        <div class="ff"><label>Teléfono</label><input type="text" id="f-telefono"></div>
+        <div class="ff"><label>Teléfono</label><input type="text" id="f-telefono" oninput="checkDuplicate()" placeholder="Ej: 612345678"><div class="dup-alert" id="dup-alert"></div></div>
         <div class="ff"><label>Fuente</label><select id="f-fuente"></select></div>
         <div class="fsec">Fase 1 — Contacto</div>
         <div class="ff"><label>Fecha contacto</label><input type="date" id="f-fecha_contacto"></div>
@@ -449,18 +445,6 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
     </div>
   </div>
 </div>
-
-<div id="login-screen">
-  <div class="login-box">
-    <div class="login-logo">DA</div>
-    <div class="login-title">Distrito de Abogados</div>
-    <div class="login-sub">Introduce la contraseña para acceder</div>
-    <input type="password" class="login-input" id="login-pwd" placeholder="••••••••" 
-      onkeydown="if(event.key==='Enter')checkLogin()">
-    <button class="login-btn" onclick="checkLogin()">Entrar</button>
-    <div class="login-error" id="login-error">Contraseña incorrecta</div>
-  </div>
-</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -470,7 +454,7 @@ const EST_C=['CITADO','NO RESPONDE','RECHAZA OFERTA','NO CORRESPONDE'];
 const EST_E=['APROBADO','DESCARTADO RRHH','DESCARTADO COORDINACION','EN BACK UP','NO SHOW'];
 const EST_F=['CONTRATADO','NO ACEPTA OFERTA'];
 
-const SK='da_sel_v40';
+const SK='da_sel_v39';
 const SCRIPT_URL='https://script.google.com/macros/s/AKfycbyDIyCjUP5tc7Q7BcnCYIaTKrKBgW7r7mo-LYvx_rRskeTfpnUfA1GK9iAuMMHrrHD0/exec';
 let db={procesos:[],candidatos:[]};
 let isSyncing=false;
@@ -1015,7 +999,7 @@ function closeDrawer(){document.getElementById('drawer').classList.remove('open'
 function openAddCand(){
   editingCandId=null;
   document.getElementById('modal-cand-title').textContent='Añadir candidato';
-  document.getElementById('cand-form').reset();
+  document.getElementById('cand-form').reset();document.getElementById('dup-alert').classList.remove('show');
   document.getElementById('ov-cand').classList.add('open');
   setTimeout(()=>document.getElementById('f-candidato').focus(),100);
 }
@@ -1424,33 +1408,36 @@ function exportExcel() {
 }
 
 
-/* ---- LOGIN ---- */
-const LOGIN_KEY = 'da_auth_v1';
-const LOGIN_PWD = 'Distrito2026';
+/* ---- DUPLICATE CHECK ---- */
+function checkDuplicate(){
+  const tel = (document.getElementById('f-telefono').value||'').replace(/\s+/g,'').trim();
+  const alertEl = document.getElementById('dup-alert');
+  if(!tel || tel.length < 6){alertEl.classList.remove('show');return;}
 
-function checkLogin(){
-  const pwd = document.getElementById('login-pwd').value;
-  if(pwd === LOGIN_PWD){
-    sessionStorage.setItem(LOGIN_KEY, '1');
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('login-error').style.display = 'none';
-  } else {
-    document.getElementById('login-error').style.display = 'block';
-    document.getElementById('login-pwd').value = '';
-    document.getElementById('login-pwd').focus();
-  }
-}
+  // Search all candidates for matching phone
+  const matches = db.candidatos.filter(c => {
+    const cTel = (c.telefono||'').replace(/\s+/g,'').trim();
+    return cTel && cTel === tel && c.id !== editingCandId;
+  });
 
-function checkAuth(){
-  if(sessionStorage.getItem(LOGIN_KEY) !== '1'){
-    document.getElementById('login-screen').style.display = 'flex';
-  } else {
-    document.getElementById('login-screen').style.display = 'none';
-  }
+  if(!matches.length){alertEl.classList.remove('show');return;}
+
+  const rows = matches.map(c => {
+    const p = db.procesos.find(x=>x.id===c.proceso_id);
+    const estado = c.estado_final || c.estado_entrevistas || c.estado_contacto || '—';
+    return `<div style="border-top:1px solid #FFD54F;padding-top:8px;margin-top:8px">
+      <div class="dup-row"><span class="dup-key">Candidato</span><span class="dup-val">${c.candidato}</span></div>
+      <div class="dup-row"><span class="dup-key">Proceso</span><span class="dup-val">${p?p.nombre:'—'}</span></div>
+      <div class="dup-row"><span class="dup-key">Estado</span><span class="dup-val">${estado}</span></div>
+      ${c.comentarios?`<div class="dup-row"><span class="dup-key">Comentarios</span><span class="dup-val" style="color:var(--muted)">${c.comentarios.slice(0,120)}${c.comentarios.length>120?'...':''}</span></div>`:''}
+    </div>`;
+  }).join('');
+
+  alertEl.innerHTML = `<div class="dup-title">⚠️ Este teléfono ya existe en la base de datos</div>${rows}`;
+  alertEl.classList.add('show');
 }
 /* ---- INIT ---- */
 (async()=>{
-  checkAuth();
   await load();
   populateSelects();
   renderProcesos();
