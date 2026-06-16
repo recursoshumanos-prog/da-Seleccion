@@ -185,13 +185,6 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
 .gauth-bar button{padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--amber);background:transparent;color:var(--amber)}
 .gauth-bar button:hover{background:var(--amber-bg)}
 .gauth-bar.hidden{display:none}
-
-.dup-alert{background:#FFF8E1;border:1px solid #FFD54F;border-radius:var(--radius);padding:10px 12px;margin-top:6px;font-size:12px;display:none}
-.dup-alert.show{display:block}
-.dup-alert .dup-title{font-weight:600;color:#E65100;margin-bottom:4px}
-.dup-alert .dup-row{display:flex;gap:8px;align-items:center;margin-top:3px}
-.dup-alert .dup-key{color:var(--muted);width:90px;flex-shrink:0}
-.dup-alert .dup-val{font-weight:500}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -367,7 +360,7 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
       <div class="form-grid">
         <div class="fsec">Datos del candidato</div>
         <div class="ff"><label>Candidato *</label><input type="text" id="f-candidato" required></div>
-        <div class="ff"><label>Teléfono</label><input type="text" id="f-telefono" oninput="checkDuplicate()" placeholder="Ej: 612345678"><div class="dup-alert" id="dup-alert"></div></div>
+        <div class="ff"><label>Teléfono</label><input type="text" id="f-telefono"></div>
         <div class="ff"><label>Fuente</label><select id="f-fuente"></select></div>
         <div class="fsec">Fase 1 — Contacto</div>
         <div class="ff"><label>Fecha contacto</label><input type="date" id="f-fecha_contacto"></div>
@@ -999,7 +992,7 @@ function closeDrawer(){document.getElementById('drawer').classList.remove('open'
 function openAddCand(){
   editingCandId=null;
   document.getElementById('modal-cand-title').textContent='Añadir candidato';
-  document.getElementById('cand-form').reset();document.getElementById('dup-alert').classList.remove('show');
+  document.getElementById('cand-form').reset();
   document.getElementById('ov-cand').classList.add('open');
   setTimeout(()=>document.getElementById('f-candidato').focus(),100);
 }
@@ -1407,35 +1400,6 @@ function exportExcel() {
   toast('Excel descargado correctamente');
 }
 
-
-/* ---- DUPLICATE CHECK ---- */
-function checkDuplicate(){
-  const tel = (document.getElementById('f-telefono').value||'').replace(/\s+/g,'').trim();
-  const alertEl = document.getElementById('dup-alert');
-  if(!tel || tel.length < 6){alertEl.classList.remove('show');return;}
-
-  // Search all candidates for matching phone
-  const matches = db.candidatos.filter(c => {
-    const cTel = (c.telefono||'').replace(/\s+/g,'').trim();
-    return cTel && cTel === tel && c.id !== editingCandId;
-  });
-
-  if(!matches.length){alertEl.classList.remove('show');return;}
-
-  const rows = matches.map(c => {
-    const p = db.procesos.find(x=>x.id===c.proceso_id);
-    const estado = c.estado_final || c.estado_entrevistas || c.estado_contacto || '—';
-    return `<div style="border-top:1px solid #FFD54F;padding-top:8px;margin-top:8px">
-      <div class="dup-row"><span class="dup-key">Candidato</span><span class="dup-val">${c.candidato}</span></div>
-      <div class="dup-row"><span class="dup-key">Proceso</span><span class="dup-val">${p?p.nombre:'—'}</span></div>
-      <div class="dup-row"><span class="dup-key">Estado</span><span class="dup-val">${estado}</span></div>
-      ${c.comentarios?`<div class="dup-row"><span class="dup-key">Comentarios</span><span class="dup-val" style="color:var(--muted)">${c.comentarios.slice(0,120)}${c.comentarios.length>120?'...':''}</span></div>`:''}
-    </div>`;
-  }).join('');
-
-  alertEl.innerHTML = `<div class="dup-title">⚠️ Este teléfono ya existe en la base de datos</div>${rows}`;
-  alertEl.classList.add('show');
-}
 /* ---- INIT ---- */
 (async()=>{
   await load();
