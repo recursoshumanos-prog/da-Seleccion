@@ -573,22 +573,24 @@ let procesoTab='abiertos';
 
 /* ---- PERSISTENCE ---- */
 async function load(){
+  // Supabase es la fuente de verdad — siempre va primero
+  const gotSheets=await loadFromSheets();
+  if(gotSheets){
+    localStorage.setItem(SK,JSON.stringify(db));
+    return;
+  }
+  // Sin conexión: caché local
   try{
     const s=localStorage.getItem(SK);
-    if(s){db=JSON.parse(s);}
-    else{initSeedData();}
-  }catch(e){initSeedData();}
-  // Try to get fresher data from Sheets
-  const gotSheets=await loadFromSheets();
-  if(!gotSheets && !localStorage.getItem(SK)){
-    initSeedData();
-  }
+    if(s){const p=JSON.parse(s);if(p&&p.procesos&&p.procesos.length>0){db=p;return;}}
+  }catch(e){}
+  // Último recurso: semilla sin tocar Supabase
+  db=JSON.parse(JSON.stringify(GROUPED_DB));
 }
 function save(){saveToSheets(db);}
 
 function initSeedData(){
   db=JSON.parse(JSON.stringify(GROUPED_DB));
-  save();
 }
 
 /* ---- UTILS ---- */
@@ -657,7 +659,8 @@ function renderProcesos(){
   grid.innerHTML=list.map(p=>{
     const cands=db.candidatos.filter(c=>c.proceso_id===p.id);
     const citados=cands.filter(c=>c.estado_contacto==='CITADO').length;
-    const aprobados=cands.filter(c=>c.estado_entrevistas==='APROBADO').length;
+    const aprobRRHH=cands.filter(c=>c.estado_entrevistas==='APROBADO').length;
+    const aprobDir=cands.filter(c=>c.estado_entrevistas2==='APROBADO').length;
     const contratados=cands.filter(c=>c.estado_final==='CONTRATADO').length;
     return`<div class="proceso-card${p.estado==='cerrado'?' archived':''}" onclick="openProceso('${p.id}')" style="border-top:3px solid ${p.empresa==='esf'?'var(--esf)':' var(--red)'}">
       <div class="pc-menu" onclick="event.stopPropagation()">
@@ -672,10 +675,11 @@ function renderProcesos(){
       <div class="pc-puesto">${p.nombre}</div>
       ${p.descripcion?`<div class="pc-empresa">${p.descripcion}</div>`:'<div class="pc-empresa" style="height:16px"></div>'}
       <div class="pc-stats">
-        <div class="pc-stat"><div class="n">${cands.length}</div><div class="l">Candidatos</div></div>
-        <div class="pc-stat"><div class="n">${citados}</div><div class="l">Citados</div></div>
-        <div class="pc-stat"><div class="n">${aprobados}</div><div class="l">Aprobados</div></div>
-        <div class="pc-stat"><div class="n" style="color:var(--green)">${contratados}</div><div class="l">Contratados</div></div>
+        <div class="pc-stat"><div class="n">${cands.length}</div><div class="l">Total</div></div>
+        <div class="pc-stat"><div class="n">${citados}</div><div class="l">F1 Citados</div></div>
+        <div class="pc-stat"><div class="n" style="color:var(--green)">${aprobRRHH}</div><div class="l">F2 Apro.RRHH</div></div>
+        <div class="pc-stat"><div class="n" style="color:#F59E0B">${aprobDir}</div><div class="l">F3 Apro.Dir.</div></div>
+        <div class="pc-stat"><div class="n" style="color:var(--green)">${contratados}</div><div class="l">F4 Contrat.</div></div>
       </div>
       <div class="pc-date">
         ${p.fecha_apertura?`Abierto el ${fmtDate(p.fecha_apertura)}`:`Creado el ${fmtDate(p.fecha)}`}
@@ -828,7 +832,8 @@ function renderProcesoStats(pid){
   const cands = db.candidatos.filter(c=>c.proceso_id===pid);
   const total = cands.length;
   const citados = cands.filter(c=>c.estado_contacto==='CITADO').length;
-  const aprobados = cands.filter(c=>c.estado_entrevistas==='APROBADO').length;
+  const aprobRRHH = cands.filter(c=>c.estado_entrevistas==='APROBADO').length;
+  const aprobDir = cands.filter(c=>c.estado_entrevistas2==='APROBADO').length;
   const contratados = cands.filter(c=>c.estado_final==='CONTRATADO').length;
   const noacepta = cands.filter(c=>c.estado_final==='NO ACEPTA OFERTA').length;
 
@@ -873,12 +878,12 @@ function renderProcesoStats(pid){
   const srcs = Object.entries(srcMap).sort((a,b)=>b[1]-a[1]);
   const sMax = srcs[0]?srcs[0][1]:1;
 
-  // Funnel
   const funnel = [
-    {lbl:'Total contactados',n:total,c:'#C8102E'},
-    {lbl:'Citados a entrevista',n:citados,c:'#2563EB'},
-    {lbl:'Aprobados',n:aprobados,c:'#059669'},
-    {lbl:'Contratados',n:contratados,c:'#7C3AED'},
+    {lbl:'F1 · Total contactados',n:total,c:'#C8102E'},
+    {lbl:'F1 · Citados a entrevista',n:citados,c:'#2563EB'},
+    {lbl:'F2 · Aprobados por RRHH',n:aprobRRHH,c:'#059669'},
+    {lbl:'F3 · Aprobados por Dirección',n:aprobDir,c:'#F59E0B'},
+    {lbl:'F4 · Contratados',n:contratados,c:'#7C3AED'},
   ];
 
   const barRow = (lbl,n,max,color) => `
@@ -901,9 +906,14 @@ function renderProcesoStats(pid){
           <div class="st-kpi-sub">${total?(citados/total*100).toFixed(0):0}% del total</div>
         </div>
         <div class="st-kpi">
-          <div class="st-kpi-val">${aprobados}</div>
-          <div class="st-kpi-lbl">Aprobados</div>
-          <div class="st-kpi-sub">${citados?(aprobados/citados*100).toFixed(0):0}% de citados</div>
+          <div class="st-kpi-val">${aprobRRHH}</div>
+          <div class="st-kpi-lbl">Apro. RRHH (F2)</div>
+          <div class="st-kpi-sub">${citados?(aprobRRHH/citados*100).toFixed(0):0}% de citados</div>
+        </div>
+        <div class="st-kpi">
+          <div class="st-kpi-val" style="color:#F59E0B">${aprobDir}</div>
+          <div class="st-kpi-lbl">Apro. Dir. (F3)</div>
+          <div class="st-kpi-sub">${aprobRRHH?(aprobDir/aprobRRHH*100).toFixed(0):0}% de F2</div>
         </div>
         <div class="st-kpi">
           <div class="st-kpi-val" style="color:var(--green)">${contratados}</div>
@@ -1123,7 +1133,8 @@ function renderEstadisticas(){
   const cands=db.candidatos;
   const total=cands.length;
   const citados=cands.filter(c=>c.estado_contacto==='CITADO').length;
-  const aprobados=cands.filter(c=>c.estado_entrevistas==='APROBADO').length;
+  const aprobRRHH=cands.filter(c=>c.estado_entrevistas==='APROBADO').length;
+  const aprobDir=cands.filter(c=>c.estado_entrevistas2==='APROBADO').length;
   const contratados=cands.filter(c=>c.estado_final==='CONTRATADO').length;
   const noacepta=cands.filter(c=>c.estado_final==='NO ACEPTA OFERTA').length;
   const conv=total?((contratados/total)*100).toFixed(1):0;
@@ -1143,9 +1154,10 @@ function renderEstadisticas(){
   // KPIs
   document.getElementById('st-kpis').innerHTML=[
     {val:total,lbl:'Total candidatos',sub:'',accent:true},
-    {val:citados,lbl:'Citados',sub:`${total?(citados/total*100).toFixed(0):0}% del total`},
-    {val:aprobados,lbl:'Aprobados',sub:`${citados?(aprobados/citados*100).toFixed(0):0}% de citados`},
-    {val:contratados,lbl:'Contratados',sub:`Conversión global: ${conv}%`},
+    {val:citados,lbl:'Citados (F1)',sub:`${total?(citados/total*100).toFixed(0):0}% del total`},
+    {val:aprobRRHH,lbl:'Apro. RRHH (F2)',sub:`${citados?(aprobRRHH/citados*100).toFixed(0):0}% de citados`},
+    {val:aprobDir,lbl:'Apro. Dir. (F3)',sub:`${aprobRRHH?(aprobDir/aprobRRHH*100).toFixed(0):0}% de F2`},
+    {val:contratados,lbl:'Contratados (F4)',sub:`Conversión global: ${conv}%`},
     {val:ttfMedio!==null?ttfMedio+'d':'—',lbl:'Time to fill medio',sub:ttfs.length+' procesos con datos'},
   ].map((k,i)=>`<div class="st-kpi${k.accent?' accent':''}" >
     <div class="st-kpi-val" style="${i===3?'color:var(--green)':''}${i===4?'color:var(--blue)':''}${i===0?'color:var(--red)':''}">${k.val}</div>
@@ -1153,12 +1165,12 @@ function renderEstadisticas(){
     ${k.sub?`<div class="st-kpi-sub">${k.sub}</div>`:''}
   </div>`).join('');
 
-  // Embudo
   const funnel=[
-    {lbl:'Total contactados',n:total,c:'#C8102E'},
-    {lbl:'Citados a entrevista',n:citados,c:'#2563EB'},
-    {lbl:'Aprobados',n:aprobados,c:'#059669'},
-    {lbl:'Contratados',n:contratados,c:'#7C3AED'},
+    {lbl:'F1 · Total contactados',n:total,c:'#C8102E'},
+    {lbl:'F1 · Citados a entrevista',n:citados,c:'#2563EB'},
+    {lbl:'F2 · Aprobados por RRHH',n:aprobRRHH,c:'#059669'},
+    {lbl:'F3 · Aprobados por Dirección',n:aprobDir,c:'#F59E0B'},
+    {lbl:'F4 · Contratados',n:contratados,c:'#7C3AED'},
   ];
   document.getElementById('st-funnel').innerHTML=funnel.map(f=>`
     <div class="st-bar-row">
@@ -1191,9 +1203,10 @@ function renderEstadisticas(){
   const procRows=db.procesos.map(p=>{
     const pc=db.candidatos.filter(c=>c.proceso_id===p.id);
     const pa=pc.filter(c=>c.estado_entrevistas==='APROBADO').length;
+    const pa2=pc.filter(c=>c.estado_entrevistas2==='APROBADO').length;
     const pco=pc.filter(c=>c.estado_final==='CONTRATADO').length;
     const pct=pc.length?Math.round(pco/pc.length*100):0;
-    return{nombre:p.nombre,n:pc.length,a:pa,c:pco,pct,estado:p.estado};
+    return{nombre:p.nombre,n:pc.length,a:pa,a2:pa2,c:pco,pct,estado:p.estado};
   }).sort((a,b)=>b.n-a.n);
   const pMax=procRows[0]?procRows[0].n:1;
   document.getElementById('st-procesos').innerHTML=procHeader+procRows.map(p=>`
@@ -1407,8 +1420,32 @@ window.addEventListener('load', () => {
 /* ---- EXPORT EXCEL ---- */
 function exportExcel() {
   const wb = XLSX.utils.book_new();
-  const headers = ['Candidato','Teléfono','Fuente','Fecha Contacto','Estado Contacto',
-    'Fecha Entrevista','Estado Entrevistas','Estado Final','Fecha Incorporación','Comentarios','CV'];
+  const headers = ['Candidato','Teléfono','Fuente',
+    'F1 Fecha Contacto','F1 Estado Contacto',
+    'F2 Fecha Entrev. RRHH','F2 Estado RRHH',
+    'F3 Fecha Entrev. Dir.','F3 Estado Dirección',
+    'F4 Estado Final','F4 Fecha Incorporación',
+    'Fase Actual','Comentarios','CV'];
+
+  function faseActual(c){
+    if(c.estado_final==='CONTRATADO')             return 'F4 · CONTRATADO';
+    if(c.estado_final==='NO ACEPTA OFERTA')       return 'F4 · NO ACEPTA OFERTA';
+    if(c.estado_final==='DESCARTADO')             return 'F4 · DESCARTADO';
+    if(c.estado_entrevistas2==='APROBADO')        return 'F3 · Aprobado Dirección';
+    if(c.estado_entrevistas2==='DESCARTADO')      return 'F3 · Descartado Dirección';
+    if(c.estado_entrevistas2==='EN BACK UP')      return 'F3 · En Back Up';
+    if(c.estado_entrevistas2==='NO SHOW')         return 'F3 · No Show';
+    if(c.estado_entrevistas==='APROBADO')         return 'F2 · Aprobado RRHH';
+    if(c.estado_entrevistas==='DESCARTADO RRHH')  return 'F2 · Descartado RRHH';
+    if(c.estado_entrevistas==='DESCARTADO COORDINACION') return 'F2 · Desc. Coordinación';
+    if(c.estado_entrevistas==='EN BACK UP')       return 'F2 · En Back Up';
+    if(c.estado_entrevistas==='NO SHOW')          return 'F2 · No Show';
+    if(c.estado_contacto==='CITADO')              return 'F1 · Citado';
+    if(c.estado_contacto==='NO RESPONDE')         return 'F1 · No Responde';
+    if(c.estado_contacto==='RECHAZA OFERTA')      return 'F1 · Rechaza Oferta';
+    if(c.estado_contacto==='NO CORRESPONDE')      return 'F1 · No Corresponde';
+    return c.estado_contacto||'Sin estado';
+  }
 
   // Sheet por proceso
   db.procesos.forEach(p => {
@@ -1417,18 +1454,20 @@ function exportExcel() {
       c.candidato||'', c.telefono||'', c.fuente||'',
       c.fecha_contacto||'', c.estado_contacto||'',
       c.fecha_entrevista||'', c.estado_entrevistas||'',
+      c.fecha_entrevista2||'', c.estado_entrevistas2||'',
       c.estado_final||'', c.fecha_incorporacion||'',
+      faseActual(c),
       c.comentarios||'', c.cv_url||''
     ]);
     const wsData = [headers, ...rows];
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     // Column widths
-    ws['!cols'] = [20,14,12,14,18,14,22,16,18,40,30].map(w=>({wch:w}));
+    ws['!cols'] = [22,14,12,14,18,14,20,14,20,18,18,20,40,30].map(w=>({wch:w}));
     // Header style
     const range = XLSX.utils.decode_range(ws['!ref']);
     for(let C=range.s.c; C<=range.e.c; C++){
       const cell = ws[XLSX.utils.encode_cell({r:0,c:C})];
-      if(cell) cell.s = {font:{bold:true},fill:{fgColor:{rgb:'C8102E'}},font:{bold:true,color:{rgb:'FFFFFF'}}};
+      if(cell) cell.s = {font:{bold:true,color:{rgb:'FFFFFF'}},fill:{fgColor:{rgb:'C8102E'}}};
     }
     // Sheet name max 31 chars, no special chars
     const sheetName = p.nombre.replace(/[\/*?:[\]]/g,'').slice(0,31);
@@ -1437,21 +1476,22 @@ function exportExcel() {
 
   // Sheet resumen
   const resumenData = [
-    ['Proceso','Estado','Candidatos','Citados','Aprobados','Contratados','Apertura','Cierre'],
+    ['Proceso','Empresa','Estado','Total','F1 Citados','F2 Apro.RRHH','F3 Apro.Dir.','F4 Contratados','Apertura','Cierre'],
     ...db.procesos.map(p => {
-      const cands = db.candidatos.filter(c => c.proceso_id === p.id);
+      const pc = db.candidatos.filter(c => c.proceso_id === p.id);
       return [
-        p.nombre, p.estado,
-        cands.length,
-        cands.filter(c=>c.estado_contacto==='CITADO').length,
-        cands.filter(c=>c.estado_entrevistas==='APROBADO').length,
-        cands.filter(c=>c.estado_final==='CONTRATADO').length,
+        p.nombre, (p.empresa||'').toUpperCase(), p.estado,
+        pc.length,
+        pc.filter(c=>c.estado_contacto==='CITADO').length,
+        pc.filter(c=>c.estado_entrevistas==='APROBADO').length,
+        pc.filter(c=>c.estado_entrevistas2==='APROBADO').length,
+        pc.filter(c=>c.estado_final==='CONTRATADO').length,
         p.fecha_apertura||'', p.fecha_cierre||''
       ];
     })
   ];
   const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
-  wsResumen['!cols'] = [25,10,12,10,12,14,14,14].map(w=>({wch:w}));
+  wsResumen['!cols'] = [25,10,10,8,12,14,14,14,14,14].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen');
 
   const fecha = new Date().toISOString().slice(0,10);
