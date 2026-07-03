@@ -146,6 +146,22 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(60px);background:#111827;color:#fff;padding:9px 16px;border-radius:var(--radius);font-size:12px;transition:transform .2s;z-index:200}
 .toast.show{transform:translateX(-50%) translateY(0)}
 
+/* GLOBAL SEARCH (header) */
+.global-search-wrap{position:relative;width:300px;flex-shrink:0}
+.global-search-wrap input{width:100%;padding:7px 10px 7px 30px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;outline:none;background:var(--bg)}
+.global-search-wrap input:focus{border-color:var(--red);box-shadow:0 0 0 3px var(--red-light)}
+.global-search-wrap .gs-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--subtle);font-size:13px;pointer-events:none}
+.global-search-results{position:absolute;top:calc(100% + 6px);left:0;width:380px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:0 10px 28px rgba(0,0,0,.14);max-height:380px;overflow-y:auto;z-index:150;display:none}
+.global-search-results.show{display:block}
+.gsr-item{padding:10px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s}
+.gsr-item:last-child{border-bottom:none}
+.gsr-item:hover{background:var(--gray-bg)}
+.gsr-name{font-size:13px;font-weight:600;color:var(--text)}
+.gsr-meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.gsr-proc{color:var(--red);font-weight:500}
+.gsr-empty{padding:18px;text-align:center;color:var(--subtle);font-size:12px}
+.gsr-count{padding:7px 12px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--subtle);border-bottom:1px solid var(--border);background:var(--gray-bg)}
+
 /* PROCESO HEADER BAR */
 .proceso-topbar{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
 .proceso-topbar .title{font-size:14px;font-weight:600}
@@ -218,7 +234,12 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
   <div class="breadcrumb" id="breadcrumb" style="margin-left:16px">
     <span>Selección</span>
   </div>
-  <div class="ml-auto" style="display:flex;gap:8px;align-items:center" id="header-actions"></div>
+  <div class="global-search-wrap ml-auto" id="global-search-wrap">
+    <span class="gs-icon">🔍</span>
+    <input type="text" id="global-search" placeholder="Buscar candidato por nombre o teléfono..." autocomplete="off" oninput="globalSearch()" onfocus="globalSearch()" onkeydown="if(event.key==='Escape'){this.value='';globalSearch();this.blur();}">
+    <div class="global-search-results" id="global-search-results"></div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center" id="header-actions"></div>
   <span id="sync-status" style="font-size:11px;color:var(--muted);margin-left:8px;transition:opacity .5s;opacity:0"></span>
 </header>
 <!-- VIEW: LISTA DE PROCESOS -->
@@ -1499,6 +1520,64 @@ function exportExcel() {
   toast('Excel descargado correctamente');
 }
 
+
+/* ---- GLOBAL SEARCH ---- */
+function globalSearch(){
+  const raw=(document.getElementById('global-search').value||'').trim();
+  const box=document.getElementById('global-search-results');
+  if(raw.length<2){box.classList.remove('show');box.innerHTML='';return;}
+  const q=raw.toLowerCase();
+  const qDigits=raw.replace(/\D/g,'');
+
+  const matches=db.candidatos.filter(c=>{
+    const name=(c.candidato||'').toLowerCase();
+    const tel=(c.telefono||'').replace(/\D/g,'');
+    const nameMatch=name.includes(q);
+    const telMatch=qDigits.length>=3 && tel && tel.includes(qDigits);
+    return nameMatch||telMatch;
+  });
+
+  if(!matches.length){
+    box.innerHTML='<div class="gsr-empty">Sin resultados para "'+raw.replace(/</g,'')+'"</div>';
+    box.classList.add('show');
+    return;
+  }
+
+  const shown=matches.slice(0,30);
+  const header=`<div class="gsr-count">${matches.length} candidato${matches.length!==1?'s':''} encontrado${matches.length!==1?'s':''}${matches.length>30?' · mostrando 30':''}</div>`;
+  const items=shown.map(c=>{
+    const p=db.procesos.find(x=>x.id===c.proceso_id);
+    const estado=c.estado_final||c.estado_entrevistas2||c.estado_entrevistas||c.estado_contacto||'Sin estado';
+    return `<div class="gsr-item" onclick="goToGlobalResult('${c.id}')">
+      <div class="gsr-name">${c.candidato||'(sin nombre)'}</div>
+      <div class="gsr-meta">
+        <span class="gsr-proc">${p?p.nombre:'Proceso eliminado'}${p&&p.estado==='cerrado'?' (cerrado)':''}</span>
+        <span>📞 ${c.telefono||'—'}</span>
+        <span>${estado}</span>
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML=header+items;
+  box.classList.add('show');
+}
+function goToGlobalResult(candId){
+  const c=db.candidatos.find(x=>x.id===candId);if(!c)return;
+  document.getElementById('global-search').value='';
+  document.getElementById('global-search-results').classList.remove('show');
+  document.getElementById('global-search-results').innerHTML='';
+  if(!c.proceso_id||!db.procesos.find(p=>p.id===c.proceso_id)){
+    toast('El proceso de este candidato ya no existe');
+    return;
+  }
+  openProceso(c.proceso_id);
+  setTimeout(()=>openDrawer(candId),30);
+}
+document.addEventListener('click',function(e){
+  const wrap=document.getElementById('global-search-wrap');
+  if(wrap && !wrap.contains(e.target)){
+    document.getElementById('global-search-results').classList.remove('show');
+  }
+});
 
 /* ---- DUPLICATE CHECK ---- */
 function checkDuplicate(){
