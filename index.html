@@ -469,7 +469,8 @@ td.comment{color:var(--muted);font-size:12px;max-width:200px;overflow:hidden;tex
         <div class="ff" style="grid-column:1/-1">
           <label>CV (enlace o subir archivo)</label>
           <div style="display:flex;gap:8px;align-items:center">
-            <input type="text" id="f-cv_url" placeholder="https://drive.google.com/... o sube el archivo →" style="flex:1">
+            <input type="text" id="f-cv_url" placeholder="Sube el archivo → (o pega un enlace)" style="flex:1" oninput="document.getElementById('f-cv_nombre').value=''">
+            <input type="text" id="f-cv_nombre" style="display:none" tabindex="-1" aria-hidden="true">
             <button type="button" class="cv-btn" onclick="uploadCV()" id="cv-upload-btn">📎 Subir CV</button>
           </div>
         </div>
@@ -609,13 +610,14 @@ const LOGO_ESF='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4p
 const SK='da_sel_v43';
 const SK_BASE=SK+'_base';     // ultimo estado confirmado en Supabase
 const SK_PEND=SK+'_pend';     // hay cambios locales sin subir
-const APP_VERSION='v2.0';
+const APP_VERSION='v2.1';
 const SB_URL='https://yykvtpdhgrvvvevnteth.supabase.co';
 const SB_KEY='sb_publishable_0ucHozGNGjmaAXLUOXoekA_su7ki6lk'; // clave PUBLICA: por si sola no da acceso a ningun dato
 const SB_TABLE='datos';
 const SESS_KEY='da_sel_sesion';
 const REV_TAG='DASELREVTAG';
-const SCRIPT_URL='https://script.google.com/macros/s/AKfycbyDIyCjUP5tc7Q7BcnCYIaTKrKBgW7r7mo-LYvx_rRskeTfpnUfA1GK9iAuMMHrrHD0/exec';
+const CV_BUCKET='cvs';       // almacen privado de CVs en Supabase (solo usuarios con permiso)
+const CV_MAX_MB=10;
 let db={procesos:[],candidatos:[]};
 let isSyncing=false;
 let _sess=null;            // sesion de Supabase Auth
@@ -1108,8 +1110,10 @@ function deleteProceso(id){
   const p=db.procesos.find(x=>x.id===id);
   const n=db.candidatos.filter(c=>c.proceso_id===id).length;
   if(!confirm(`¿Eliminar el proceso "${p.nombre}" y sus ${n} candidatos?`))return;
+  const cvs=db.candidatos.filter(c=>c.proceso_id===id).map(c=>c.cv_url);
   db.procesos=db.procesos.filter(x=>x.id!==id);
   db.candidatos=db.candidatos.filter(c=>c.proceso_id!==id);
+  borrarCVsHuerfanos(cvs);
   save();renderProcesos();toast('Proceso eliminado');
 }
 
@@ -1393,8 +1397,10 @@ function openDrawer(id){
     ttf=`<div class="detail-row"><span class="dk">Time to fill</span><span class="dv">${days} días</span></div>`;
   }
   const cvLabel = r.cv_nombre || 'Ver CV';
-  const cvHtml = (r.cv_url && r.cv_url.startsWith('http'))
-    ? `<div style="margin-top:14px"><a href="${r.cv_url}" target="_blank" class="cv-btn uploaded" style="display:inline-flex;text-decoration:none">📄 ${cvLabel}</a></div>`
+  const cvHtml = esCVAlmacen(r.cv_url)
+    ? `<div style="margin-top:14px"><button type="button" class="cv-btn uploaded" style="display:inline-flex" onclick="abrirCV('${r.id}')">📄 ${esc(cvLabel)}</button></div>`
+    : (r.cv_url && r.cv_url.startsWith('http'))
+    ? `<div style="margin-top:14px"><a href="${esc(r.cv_url).replace(/"/g,'&quot;')}" target="_blank" rel="noopener" class="cv-btn uploaded" style="display:inline-flex;text-decoration:none">📄 ${esc(cvLabel)}</a></div>`
     : r.cv_nombre
     ? `<div style="margin-top:14px"><span class="cv-btn" style="display:inline-flex;color:var(--muted)">📄 ${r.cv_nombre} — en carpeta DA_Seleccion_CVs de Drive</span></div>`
     : '';
@@ -1416,6 +1422,7 @@ function openDrawer(id){
   document.getElementById('dr-del').onclick=()=>deleteCand(id);
   document.getElementById('drawer').classList.add('open');
 }
+function resetCvBtn(){const b=document.getElementById('cv-upload-btn');if(b){b.textContent='📎 Subir CV';b.classList.remove('uploaded');b.disabled=false;}}
 function closeDrawer(){document.getElementById('drawer').classList.remove('open');}
 
 /* ---- CANDIDATOS ---- */
@@ -1423,6 +1430,7 @@ function openAddCand(){
   editingCandId=null;
   document.getElementById('modal-cand-title').textContent='Añadir candidato';
   document.getElementById('cand-form').reset();document.getElementById('dup-alert').classList.remove('show');
+  resetCvBtn();
   document.getElementById('ov-cand').classList.add('open');
   setTimeout(()=>document.getElementById('f-candidato').focus(),100);
 }
@@ -1430,18 +1438,23 @@ function openEditCand(id){
   const r=db.candidatos.find(c=>c.id===id);if(!r)return;
   editingCandId=id;
   document.getElementById('modal-cand-title').textContent='Editar candidato';
-  ['candidato','telefono','fuente','fecha_contacto','estado_contacto','fecha_entrevista','estado_entrevistas','fecha_entrevista2','estado_entrevistas2','estado_final','fecha_incorporacion','comentarios','cv_url'].forEach(f=>{
+  resetCvBtn();
+  ['candidato','telefono','fuente','fecha_contacto','estado_contacto','fecha_entrevista','estado_entrevistas','fecha_entrevista2','estado_entrevistas2','estado_final','fecha_incorporacion','comentarios','cv_url','cv_nombre'].forEach(f=>{
     const el=document.getElementById('f-'+f);if(el)el.value=r[f]||'';
   });
   document.getElementById('ov-cand').classList.add('open');
 }
 function saveCandidate(e){
   e.preventDefault();
-  const flds=['candidato','telefono','fuente','fecha_contacto','estado_contacto','fecha_entrevista','estado_entrevistas','fecha_entrevista2','estado_entrevistas2','estado_final','fecha_incorporacion','comentarios','cv_url'];
+  const flds=['candidato','telefono','fuente','fecha_contacto','estado_contacto','fecha_entrevista','estado_entrevistas','fecha_entrevista2','estado_entrevistas2','estado_final','fecha_incorporacion','comentarios','cv_url','cv_nombre'];
   const obj={};flds.forEach(f=>{const el=document.getElementById('f-'+f);obj[f]=el?el.value.trim():'';});
   if(editingCandId){
     const idx=db.candidatos.findIndex(c=>c.id===editingCandId);
-    if(idx>-1)db.candidatos[idx]={...db.candidatos[idx],...obj};
+    if(idx>-1){
+      const viejo=db.candidatos[idx].cv_url||'';
+      db.candidatos[idx]={...db.candidatos[idx],...obj};
+      if(viejo!==obj.cv_url) borrarCVsHuerfanos([viejo]);
+    }
     toast('Candidato actualizado');
   }else{
     obj.id=uid();obj.proceso_id=currentProcesoId;
@@ -1452,7 +1465,9 @@ function saveCandidate(e){
 }
 function deleteCand(id){
   if(!confirm('¿Eliminar este candidato?'))return;
+  const cv=(db.candidatos.find(c=>c.id===id)||{}).cv_url;
   db.candidatos=db.candidatos.filter(c=>c.id!==id);
+  borrarCVsHuerfanos([cv]);
   save();closeDrawer();buildSidebarFilters();renderTable();toast('Candidato eliminado');
 }
 
@@ -1845,143 +1860,84 @@ async function manualSync(){
   else{toast('No se pudo sincronizar');}
 }
 
-/* ---- GOOGLE DRIVE / CV UPLOAD ---- */
-const CLIENT_ID = '1054147554990-j7gs30qqaq8favnmgtm6gm192s7u3qsa.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/drive.file';
-let gapiReady = false;
-let tokenClient = null;
-let accessToken = null;
-let cvUploadCallback = null;
-const CV_FOLDER_NAME = 'DA_Seleccion_CVs';
-let cvFolderId = null;
-
-function initGapi() {
-  gapi.load('client', async () => {
-    await gapi.client.init({
-      discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
-    });
-    gapiReady = true;
-  });
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: CLIENT_ID,
-    scope: SCOPES,
-    callback: async (resp) => {
-      if (resp.error) { console.error(resp); return; }
-      accessToken = resp.access_token;
-      gapi.client.setToken({ access_token: accessToken });
-      const bar = document.getElementById('gauth-bar');
-      if (bar) bar.classList.add('hidden');
-      const user = document.getElementById('gauth-user');
-      if (user) { user.style.display = 'inline'; user.textContent = '✓ Conectado'; }
-      if (cvUploadCallback) cvUploadCallback();
-    },
-  });
+/* ---- CVs: almacen privado en Supabase ---- */
+// En el candidato se guarda "sb:<ruta>". El archivo solo se puede subir, abrir o borrar con una sesion con permiso.
+const CV_TIPOS={pdf:'application/pdf',doc:'application/msword',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'};
+function esCVAlmacen(u){ return typeof u==='string'&&u.indexOf('sb:')===0; }
+function rutaCV(u){ return u.slice(3); }
+function urlObjeto(ruta){ return SB_URL+'/storage/v1/object/'+CV_BUCKET+'/'+ruta.split('/').map(encodeURIComponent).join('/'); }
+function nombreSeguro(s){
+  return (s||'candidato').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,60)||'candidato';
 }
-
-function signInGoogle() {
-  if (!tokenClient) { toast('Cargando...'); return; }
-  tokenClient.requestAccessToken();
+async function errorTexto(r){
+  let t=''; try{ const j=await r.json(); t=j.message||j.error||''; }catch(x){}
+  if(r.status===413||/size|exceed/i.test(t)) return 'el archivo es demasiado grande';
+  if(/mime|type/i.test(t)) return 'tipo de archivo no permitido';
+  if(r.status===400&&/bucket/i.test(t)||r.status===404) return 'falta crear el almacén de CVs en Supabase';
+  if(r.status===403||/row-level|policy/i.test(t)) return 'sin permiso para el almacén de CVs';
+  return 'error '+r.status+(t?' ('+t+')':'');
 }
-
-async function ensureCVFolder() {
-  if (cvFolderId) return cvFolderId;
-  const res = await gapi.client.drive.files.list({
-    q: "name='" + CV_FOLDER_NAME + "' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-    fields: 'files(id,name)'
-  });
-  if (res.result.files.length > 0) {
-    cvFolderId = res.result.files[0].id;
-  } else {
-    const folder = await gapi.client.drive.files.create({
-      resource: { name: CV_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' },
-      fields: 'id'
-    });
-    cvFolderId = folder.result.id;
-  }
-  return cvFolderId;
-}
-
-async function uploadCV() {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.pdf,.doc,.docx';
-  input.onchange = async () => {
-    const file = input.files[0];
-    if (!file) return;
-    const btn = document.getElementById('cv-upload-btn');
-    const urlField = document.getElementById('f-cv_url');
-    const candId = editingCandId;
-    const nombre = (document.getElementById('f-candidato').value || 'candidato').trim();
-    const ext = file.name.split('.').pop();
-    const fileName = nombre.replace(/\s+/g,'_') + '_CV.' + ext;
-    btn.textContent = '⏳ Subiendo...';
-    btn.disabled = true;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      try {
-        const base64 = ev.target.result.split(',')[1];
-        const mimeType = file.type || 'application/pdf';
-        const CHUNK = 1000; // chars per chunk
-        const chunks = [];
-        for(let i=0; i<base64.length; i+=CHUNK) chunks.push(base64.slice(i,i+CHUNK));
-        const total = chunks.length;
-        const uploadId = Date.now().toString(36);
-
-        // Send chunks
-        for(let i=0; i<chunks.length; i++){
-          btn.textContent = `⏳ Subiendo ${Math.round((i+1)/total*100)}%...`;
-          const params = new URLSearchParams({
-            action: 'uploadChunk',
-            uploadId, fileName, mimeType,
-            chunk: chunks[i],
-            index: i,
-            total
-          });
-          await fetch('https://script.google.com/macros/s/AKfycbyDIyCjUP5tc7Q7BcnCYIaTKrKBgW7r7mo-LYvx_rRskeTfpnUfA1GK9iAuMMHrrHD0/exec?' + params.toString());
-          await new Promise(r => setTimeout(r, 100));
-        }
-
-        // Finalize
-        btn.textContent = '⏳ Finalizando...';
-        const finalParams = new URLSearchParams({
-          action: 'finalizeCV',
-          uploadId, fileName, mimeType, total
-        });
-        const resp = await fetch('https://script.google.com/macros/s/AKfycbyDIyCjUP5tc7Q7BcnCYIaTKrKBgW7r7mo-LYvx_rRskeTfpnUfA1GK9iAuMMHrrHD0/exec?' + finalParams.toString());
-        const data = await resp.json();
-
-        if(data.ok && data.url){
-          urlField.value = data.url;
-          btn.textContent = '✓ CV subido';
-          btn.classList.add('uploaded');
-          toast('CV subido correctamente a Drive');
-          if(candId){
-            const cand = db.candidatos.find(c=>c.id===candId);
-            if(cand){cand.cv_url=data.url; cand.cv_nombre=fileName; save();}
-          }
-        } else {
-          throw new Error(data.error || 'Error al finalizar');
-        }
-      } catch(err) {
-        console.error('CV error:', err);
-        toast('Error: ' + err.message);
-        btn.textContent = '📎 Subir CV';
-      } finally {
-        btn.disabled = false;
-      }
-    };
-    reader.onerror = () => {toast('Error al leer'); btn.textContent='📎 Subir CV'; btn.disabled=false;};
-    reader.readAsDataURL(file);
+function uploadCV(){
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='.pdf,.doc,.docx';
+  input.onchange=async()=>{
+    const file=input.files[0]; if(!file) return;
+    const ext=(file.name.split('.').pop()||'').toLowerCase();
+    if(!CV_TIPOS[ext]){ toast('Solo PDF, DOC o DOCX'); return; }
+    if(file.size>CV_MAX_MB*1024*1024){ toast('El archivo pasa de '+CV_MAX_MB+' MB'); return; }
+    const btn=document.getElementById('cv-upload-btn');
+    const urlField=document.getElementById('f-cv_url');
+    const nomField=document.getElementById('f-cv_nombre');
+    const candId=editingCandId;
+    const fileName=nombreSeguro(document.getElementById('f-candidato').value)+'_CV.'+ext;
+    const ruta=new Date().toISOString().slice(0,7)+'/'+Date.now().toString(36)+Math.random().toString(36).slice(2,8)+'_'+fileName;
+    btn.textContent='⏳ Subiendo...'; btn.disabled=true;
+    try{
+      const r=await sbFetch(urlObjeto(ruta),{method:'POST',headers:{'Content-Type':CV_TIPOS[ext],'x-upsert':'false','cache-control':'3600'},body:file});
+      if(!r.ok) throw new Error(await errorTexto(r));
+      const anterior=urlField.value;
+      urlField.value='sb:'+ruta; nomField.value=fileName;
+      btn.textContent='✓ CV subido'; btn.classList.add('uploaded');
+      toast('CV subido');
+      if(candId){
+        const cand=db.candidatos.find(c=>c.id===candId);
+        if(cand){ const viejo=cand.cv_url; cand.cv_url='sb:'+ruta; cand.cv_nombre=fileName; save(); borrarCVsHuerfanos([viejo]); }
+      }else if(esCVAlmacen(anterior)){ borrarCVsHuerfanos([anterior]); }
+    }catch(err){
+      if(!(err&&err.auth)){ console.error('CV error:',err); toast('No se ha podido subir: '+err.message); }
+      btn.textContent='📎 Subir CV';
+    }finally{ btn.disabled=false; }
   };
   input.click();
 }
-
-window.addEventListener('load', () => {
-  if (typeof gapi !== 'undefined' && typeof google !== 'undefined') {
-    initGapi();
+// Abre el CV con un enlace temporal (caduca en 2 minutos)
+async function abrirCV(candId){
+  const c=db.candidatos.find(x=>x.id===candId); if(!c||!esCVAlmacen(c.cv_url)) return;
+  const w=window.open('','_blank');
+  if(w) w.document.write('<p style="font-family:sans-serif;color:#6B7280">Abriendo CV...</p>');
+  try{
+    const ruta=rutaCV(c.cv_url);
+    const r=await sbFetch(SB_URL+'/storage/v1/object/sign/'+CV_BUCKET+'/'+ruta.split('/').map(encodeURIComponent).join('/'),
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expiresIn:120})});
+    if(!r.ok) throw new Error(await errorTexto(r));
+    const j=await r.json(); const s=j.signedURL||j.signedUrl;
+    if(!s) throw new Error('respuesta inesperada');
+    const url=SB_URL+'/storage/v1'+(s.charAt(0)==='/'?'':'/')+s;
+    if(w) w.location.href=url; else window.open(url,'_blank');
+  }catch(err){
+    if(w) w.close();
+    if(!(err&&err.auth)) toast('No se ha podido abrir el CV: '+err.message);
   }
-});
-
+}
+// Borra del almacen los archivos que ya no usa ningun candidato (las copias entre procesos comparten archivo)
+function borrarCVsHuerfanos(urls){
+  const enUso=new Set(db.candidatos.map(c=>c.cv_url).filter(esCVAlmacen));
+  const rutas=[...new Set((urls||[]).filter(u=>esCVAlmacen(u)&&!enUso.has(u)).map(rutaCV))];
+  if(!rutas.length||!_sess) return;
+  sbFetch(SB_URL+'/storage/v1/object/'+CV_BUCKET,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({prefixes:rutas})})
+    .then(r=>{ if(!r.ok) console.warn('No se borraron CVs',r.status); }).catch(e=>console.warn('No se borraron CVs',e));
+}
 
 /* ---- EXPORT EXCEL ---- */
 function exportExcel() {
@@ -2024,7 +1980,7 @@ function exportExcel() {
       c.fecha_entrevista2||'', c.estado_entrevistas2||'',
       c.estado_final||'', c.fecha_incorporacion||'',
       faseActual(c),
-      c.comentarios||'', c.cv_url||''
+      c.comentarios||'', esCVAlmacen(c.cv_url)?('CV en la app: '+(c.cv_nombre||'archivo')):(c.cv_url||'')
     ]);
     const wsData = [headers, ...rows];
     const ws = XLSX.utils.aoa_to_sheet(wsData);
